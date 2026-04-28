@@ -166,9 +166,9 @@ with DAG(
 ) as dag:
 
     cities = [
-        {"name": "Cupertino", "lat": Variable.get("LATITUDE_CUPERTINO"), "lon": Variable.get("LONGITUDE_CUPERTINO")},
-        {"name": "San Jose", "lat": Variable.get("LATITUDE_SANJOSE"), "lon": Variable.get("LONGITUDE_SANJOSE")},
-        {"name": "San Francisco", "lat": Variable.get("LATITUDE_SANFRANCISCO"), "lon": Variable.get("LONGITUDE_SANFRANCISCO")},
+        {"name": "Los Angeles", "lat": Variable.get("LATITUDE_LOSANGELES"), "lon": Variable.get("LONGITUDE_LOSANGELES")},
+        {"name": "Fresno", "lat": Variable.get("LATITUDE_FRESNO"), "lon": Variable.get("LONGITUDE_FRESNO")},
+        {"name": "Riverside", "lat": Variable.get("LATITUDE_RIVERSIDE"), "lon": Variable.get("LONGITUDE_RIVERSIDE")},
     ]
 
     target_table = "raw.weather_data_proj"

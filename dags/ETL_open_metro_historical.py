@@ -58,7 +58,7 @@ def extract(cities):
         # take in chuncks to avoid 429 error
         for offset in range(0, total_days, 365):
             chunk_end = end_date - timedelta(days=offset)
-            chunk_start = chunk_end - timedelta(days=365)
+            chunk_start = chunk_end - timedelta(days=364)
 
             params = {
                 "latitude": city["lat"],

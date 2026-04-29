@@ -39,9 +39,10 @@ def safe_request(url, params, retries=5):
 
 @task
 def extract(cities):
-    url = "https://archive-api.open-meteo.com/v1/archive"
+    url = "https://api.open-meteo.com/v1/forecast"
 
-    target_date = (date.today() - timedelta(days=1)).isoformat()
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    today = date.today().isoformat()
 
     all_data = []
 
@@ -49,8 +50,8 @@ def extract(cities):
         params = {
             "latitude": city["lat"],
             "longitude": city["lon"],
-            "start_date": target_date,
-            "end_date": target_date,
+            "start_date": yesterday,
+            "end_date": today,
             "daily": [
                 "temperature_2m_max",
                 "temperature_2m_mean",
@@ -104,11 +105,30 @@ def extract(cities):
                 "city": city["name"],
             })
 
-    print(f"[EXTRACT] rows fetched for yesterday: {len(all_data)}")
+    print(f"Rows fetched: {len(all_data)}")
     return all_data
 
 @task
-def load(con, target_table, records):
+def transform(records):
+    for r in records:
+        r["temp_max"] = round(r["temp_max"], 2) if r["temp_max"] is not None else None
+        r["temp_mean"] = round(r["temp_mean"], 2) if r["temp_mean"] is not None else None
+        r["temp_min"] = round(r["temp_min"], 2) if r["temp_min"] is not None else None
+        r["apparent_temp_max"] = round(r["apparent_temp_max"], 2) if r["apparent_temp_max"] is not None else None
+        r["apparent_temp_mean"] = round(r["apparent_temp_mean"], 2) if r["apparent_temp_mean"] is not None else None
+        r["apparent_temp_min"] = round(r["apparent_temp_min"], 2) if r["apparent_temp_min"] is not None else None
+        r["precipitation_sum"] = round(r["precipitation_sum"], 2) if r["precipitation_sum"] is not None else None
+        r["rain_sum"] = round(r["rain_sum"], 2) if r["rain_sum"] is not None else None
+        r["wind_speed_10m_max"] = round(r["wind_speed_10m_max"], 2) if r["wind_speed_10m_max"] is not None else None
+        r["uv_index_max"] = round(r["uv_index_max"], 2) if r["uv_index_max"] is not None else None
+        r["uv_index_clear_sky_max"] = round(r["uv_index_clear_sky_max"], 2) if r["uv_index_clear_sky_max"] is not None else None
+        r["weather_code"] = str(int(r["weather_code"])) if r["weather_code"] is not None else None
+
+    return records
+
+@task
+def load(target_table, records):
+    con = return_snowflake_conn("snowflake_con")
     if not records:
         print("[LOAD] No data to load")
         return
@@ -251,7 +271,7 @@ def load(con, target_table, records):
             )
         """)
         inserted = len(records)
-        print(f"[LOAD] inserted/updated rows for yesterday: {inserted}")
+        print(f"Inserted/updated rows count: {inserted}")
 
         con.execute("COMMIT;")
 
@@ -279,4 +299,5 @@ with DAG(
     table = "weather_data_proj"
 
     raw = extract(cities)
-    load(return_snowflake_conn("snowflake_con"), f"{db}.{schema}.{table}", raw)
+    transformed = transform(raw)
+    load(f"{db}.{schema}.{table}", transformed)

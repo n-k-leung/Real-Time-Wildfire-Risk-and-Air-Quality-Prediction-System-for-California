@@ -45,7 +45,7 @@ def extract(cities):
     all_city_data = []
     url = "https://archive-api.open-meteo.com/v1/archive"
 
-    end_date = date.today() - timedelta(days=2)
+    end_date = date.today() - timedelta(days=1)
     total_days = 365 * 5
 
     for city in cities:

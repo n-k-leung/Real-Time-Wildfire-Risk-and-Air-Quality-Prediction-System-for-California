@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 import requests
 import pandas as pd
+import math
 
 from airflow import DAG
 from airflow.models import Variable
@@ -14,7 +15,6 @@ default_args = {
     "retry_delay": timedelta(minutes=3),
 }
 
-# NIFC ArcGIS FeatureServer query endpoint
 NIFC_QUERY_URL = (
     "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/"
     "InterAgencyFirePerimeterHistory_All_Years_View/FeatureServer/0/query"
@@ -25,11 +25,6 @@ def return_snowflake_conn(con_id):
     return hook.get_conn().cursor()
 
 def get_nifc_historical(city_name, lat, lon, fire_year_start):
-    """
-    Query NIFC historical fire perimeter data for a city region using a small
-    bounding box around the city.
-    """
-    # small bbox around city center; adjust later if needed
     offset = 1.0
     xmin = float(lon) - offset
     ymin = float(lat) - offset
@@ -72,13 +67,23 @@ def get_nifc_historical(city_name, lat, lon, fire_year_start):
 
     return records
 
+def most_common(series):
+    mode = series.mode()
+    return mode.iloc[0] if not mode.empty else None
+
+def clean_value(v):
+    if v is None:
+        return None
+    if isinstance(v, float) and math.isnan(v):
+        return None
+    return v
+
 @task
 def extract(cities):
     all_records = []
 
-    # Historical perimeter data; keep recent years only for a smaller first ETL
     current_year = datetime.utcnow().year
-    fire_year_start = current_year - 5
+    fire_year_start = current_year - 6   # slightly wider to avoid edge cutoff
 
     for city in cities:
         lat = float(city["lat"])
@@ -93,40 +98,83 @@ def extract(cities):
 
     return all_records
 
+
 @task
 def transform(records):
+    import pandas as pd
+    from datetime import datetime, timedelta
+
     df = pd.DataFrame(records)
 
     if df.empty:
         return []
 
-    # Convert DATE_CUR to date where possible
     df["date"] = pd.to_datetime(df["date_cur"], errors="coerce").dt.date
-
-    # Numeric cleanup
     df["gis_acres"] = pd.to_numeric(df["gis_acres"], errors="coerce")
     df["fire_year"] = pd.to_numeric(df["fire_year"], errors="coerce")
 
-    # Keep only rows with at least a city and some historical identifier/date info
+    # Remove invalid dates
+    df = df[df["date"].notna()]
+
+    today = datetime.utcnow().date() - timedelta(days=1)
+    cutoff_date = today - timedelta(days=5 * 365)
+
+    df = df[df["date"] < today]
+    df = df[df["date"] >= cutoff_date]
+
     df = df.dropna(subset=["city"])
 
-    # Optional light dedupe
-    df = df.drop_duplicates(subset=["city", "incident", "date", "fire_year"])
+    # Dataset has multiple wildfires per day so aggregate one row per city per day
+    daily_df = (
+        df.groupby(["city", "date"])
+        .agg(
+            incident_count=("irwin_id", "count"),
+            total_acres=("gis_acres", "sum"),
+            avg_acres=("gis_acres", "mean"),
+            max_acres=("gis_acres", "max"),
+            most_common_incident=("incident", most_common),
+            most_common_agency=("agency", most_common),
+            most_common_source=("source", most_common),
+        )
+        .reset_index()
+    )
 
-    result_df = df[
-        [
-            "date",
-            "city",
-            "irwin_id",
-            "incident",
-            "gis_acres",
-            "fire_year",
-            "agency",
-            "source",
-        ]
-    ]
+    today = datetime.utcnow().date() - timedelta(days=1)
+    cutoff_date = today - timedelta(days=5 * 365)
 
-    return result_df.to_dict(orient="records")
+    all_dates = pd.date_range(
+        start=cutoff_date,
+        end=today - timedelta(days=1)   # exclude today
+    ).date
+
+    cities = daily_df["city"].unique()
+
+    full_index = pd.MultiIndex.from_product(
+        [cities, all_dates], names=["city", "date"]
+    )
+
+    daily_df = (
+        daily_df
+        .set_index(["city", "date"])
+        .reindex(full_index)
+        .reset_index()
+    )
+
+    # Fill missing values for no fire days
+    daily_df["incident_count"] = daily_df["incident_count"].fillna(0)
+    daily_df["total_acres"] = daily_df["total_acres"].fillna(0)
+
+    # Place null values when day has no wildfire
+    daily_df["avg_acres"] = daily_df["avg_acres"]
+    daily_df["max_acres"] = daily_df["max_acres"]
+    daily_df["most_common_incident"] = daily_df["most_common_incident"]
+    daily_df["most_common_agency"] = daily_df["most_common_agency"]
+    daily_df["most_common_source"] = daily_df["most_common_source"]
+
+    daily_df = daily_df.where(pd.notnull(daily_df), None)
+
+    return daily_df.to_dict(orient="records")
+
 
 @task
 def load(records, database, schema, table):
@@ -142,12 +190,14 @@ def load(records, database, schema, table):
         CREATE OR REPLACE TABLE {database}.{schema}.{table} (
             date DATE,
             city VARCHAR,
-            irwin_id VARCHAR,
-            incident VARCHAR,
-            gis_acres FLOAT,
-            fire_year INTEGER,
-            agency VARCHAR,
-            source VARCHAR
+            incident_count INTEGER,
+            total_acres FLOAT,
+            avg_acres FLOAT,
+            max_acres FLOAT,
+            most_common_incident VARCHAR,
+            most_common_agency VARCHAR,
+            most_common_source VARCHAR,
+            PRIMARY KEY (date, city)
         )
         """)
 
@@ -155,20 +205,22 @@ def load(records, database, schema, table):
 
         insert_sql = f"""
         INSERT INTO {database}.{schema}.{table}
-        (date, city, irwin_id, incident, gis_acres, fire_year, agency, source)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        (date, city, incident_count, total_acres, avg_acres, max_acres,
+        most_common_incident, most_common_agency, most_common_source)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
 
         data = [
             (
-                r["date"],
-                r["city"],
-                r["irwin_id"],
-                r["incident"],
-                r["gis_acres"],
-                r["fire_year"],
-                r["agency"],
-                r["source"],
+                clean_value(r["date"]),
+                clean_value(r["city"]),
+                clean_value(r["incident_count"]),
+                clean_value(r["total_acres"]),
+                clean_value(r["avg_acres"]),
+                clean_value(r["max_acres"]),
+                clean_value(r["most_common_incident"]),
+                clean_value(r["most_common_agency"]),
+                clean_value(r["most_common_source"]),
             )
             for r in records
         ]
@@ -197,7 +249,7 @@ with DAG(
         {"name": "Riverside", "lat": Variable.get("LATITUDE_RIVERSIDE"), "lon": Variable.get("LONGITUDE_RIVERSIDE")},
     ]
 
-    db = "user_db_dog"
+    db = "user_db_coyote"
     schema = "raw"
     table = "nifc_fire_historical_proj"
 

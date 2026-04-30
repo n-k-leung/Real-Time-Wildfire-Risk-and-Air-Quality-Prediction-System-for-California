@@ -21,7 +21,7 @@ NIFC_QUERY_URL = (
 )
 
 SNOWFLAKE_CONN_ID = "snowflake_con"
-TARGET_DB    = "user_db_coyote"
+TARGET_DB    = "user_db_groundhog"
 TARGET_SCHEMA = "raw"
 TARGET_TABLE  = "nifc_fire_proj"
 FULL_TABLE   = f"{TARGET_DB}.{TARGET_SCHEMA}.{TARGET_TABLE}"
@@ -160,21 +160,16 @@ def clean_value(v):
 
 
 @task
-def extract(cities: list[dict], ds: str) -> list[dict]:
+def extract(cities: list[dict]) -> list[dict]:
     """
-    ds is the Airflow logical date (YYYY-MM-DD string), which for a @daily
-    schedule is always yesterday when catchup=False. We use it as our target
-    date so every run knows exactly which day to fetch.
+    Fetch BOTH yesterday and today data every run.
     """
-    # Prefer Airflow data interval to avoid "future date" confusion from timezone shifts.
-    context = get_current_context()
-    interval_start = context.get("data_interval_start")
-    if interval_start is not None:
-        local_dt = interval_start.in_timezone("America/Los_Angeles")
-        target_date = date(local_dt.year, local_dt.month, local_dt.day)
-    else:
-        target_date = datetime.strptime(ds, "%Y-%m-%d").date()
-    logger.info("Extract task running for date: %s", target_date)
+    today = datetime.now(timezone.utc).date()
+    yesterday = today - timedelta(days=1)
+
+    target_dates = [yesterday, today]
+
+    logger.info("Extract running for dates: %s", target_dates)
 
     all_records = []
 
@@ -183,35 +178,34 @@ def extract(cities: list[dict], ds: str) -> list[dict]:
         lat = float(city["lat"])
         lon = float(city["lon"])
 
-        try:
-            records = fetch_fire_records_for_city(city_name, lat, lon, target_date)
-            all_records.extend(records)
-        except Exception as exc:
-            # Log and continue — don't fail the whole DAG for one city
-            logger.error("Failed to fetch data for %s: %s", city_name, exc)
+        for target_date in target_dates:
+            try:
+                records = fetch_fire_records_for_city(
+                    city_name, lat, lon, target_date
+                )
+                all_records.extend(records)
+            except Exception as exc:
+                logger.error(
+                    "Failed for %s on %s: %s",
+                    city_name, target_date, exc
+                )
 
-    logger.info("Total raw records extracted across all cities: %d", len(all_records))
+    logger.info("Total extracted records: %d", len(all_records))
     return all_records
 
 
 @task
-def transform(records: list[dict], ds: str) -> list[dict]:
+def transform(records: list[dict]) -> list[dict]:
     """
-    Aggregates raw fire records into one summary row per city per day.
-    On days with no fires the city still gets a row with zeros / nulls
-    so downstream queries never have gaps.
+    Aggregate into one row per city per date (for BOTH days).
     """
-    # Keep target date aligned with extract's data interval logic.
-    context = get_current_context()
-    interval_start = context.get("data_interval_start")
-    if interval_start is not None:
-        local_dt = interval_start.in_timezone("America/Los_Angeles")
-        target_date = date(local_dt.year, local_dt.month, local_dt.day)
-    else:
-        target_date = datetime.strptime(ds, "%Y-%m-%d").date()
 
-    if not records:
-        logger.info("No records to transform — building zero-fill rows for all cities.")
+    today = datetime.now(timezone.utc).date()
+    yesterday = today - timedelta(days=1)
+
+    target_dates = {today, yesterday}
+
+    city_names = ["Los Angeles", "Fresno", "Riverside"]
 
     df = pd.DataFrame(records) if records else pd.DataFrame(
         columns=["city", "fire_date", "incident_name", "acres", "agency", "fire_behavior", "incident_type"]
@@ -220,67 +214,77 @@ def transform(records: list[dict], ds: str) -> list[dict]:
     df["fire_date"] = pd.to_datetime(df["fire_date"], errors="coerce").dt.date
     df["acres"]     = pd.to_numeric(df["acres"], errors="coerce")
 
-    df = df[df["fire_date"] == target_date]
+    # keep only today + yesterday
+    df = df[df["fire_date"].isin(target_dates)]
 
-    city_names = ["Los Angeles", "Fresno", "Riverside"]
+    results = []
 
-    if df.empty:
-        logger.info("No fire records for %s — producing zero rows.", target_date)
-        daily_df = pd.DataFrame([
-            {
-                "date":                 target_date,
-                "city":                 city,
-                "incident_count":       0,
-                "total_acres":          0.0,
-                "avg_acres":            None,
-                "max_acres":            None,
-                "most_common_incident": None,
-                "most_common_agency":   None,
-                "most_common_source":     None,
-            }
-            for city in city_names
-        ])
-    else:
-        daily_df = (
-            df.groupby("city")
+    for target_date in target_dates:
+
+        daily = df[df["fire_date"] == target_date]
+
+        if daily.empty:
+            for city in city_names:
+                results.append({
+                    "date": target_date,
+                    "city": city,
+                    "incident_count": 0,
+                    "total_acres": 0.0,
+                    "avg_acres": None,
+                    "max_acres": None,
+                    "most_common_incident": None,
+                    "most_common_agency": None,
+                    "most_common_source": None,
+                })
+            continue
+
+        agg_df = (
+            daily.groupby("city")
             .agg(
-                incident_count=   ("incident_name", "count"),
-                total_acres=      ("acres",          "sum"),
-                avg_acres=        ("acres",          "mean"),
-                max_acres=        ("acres",          "max"),
+                incident_count=("incident_name", "count"),
+                total_acres=("acres", "sum"),
+                avg_acres=("acres", "mean"),
+                max_acres=("acres", "max"),
                 most_common_incident=("incident_name", most_common),
-                most_common_agency=  ("agency",        most_common),
-                most_common_source=    ("incident_type", most_common),
+                most_common_agency=("agency", most_common),
+                most_common_source=("incident_type", most_common),
             )
             .reset_index()
         )
-        daily_df["date"] = target_date
 
+        agg_df["date"] = target_date
+
+        # ensure all cities present
         for city in city_names:
-            if city not in daily_df["city"].values:
-                daily_df = pd.concat([
-                    daily_df,
+            if city not in agg_df["city"].values:
+                agg_df = pd.concat([
+                    agg_df,
                     pd.DataFrame([{
-                        "date":                 target_date,
-                        "city":                 city,
-                        "incident_count":       0,
-                        "total_acres":          0.0,
-                        "avg_acres":            None,
-                        "max_acres":            None,
+                        "date": target_date,
+                        "city": city,
+                        "incident_count": 0,
+                        "total_acres": 0.0,
+                        "avg_acres": None,
+                        "max_acres": None,
                         "most_common_incident": None,
-                        "most_common_agency":   None,
-                        "most_common_source":     None,
+                        "most_common_agency": None,
+                        "most_common_source": None,
                     }])
                 ], ignore_index=True)
 
-    daily_df["avg_acres"] = pd.to_numeric(daily_df["avg_acres"], errors="coerce").round(3)
-    daily_df["total_acres"] = pd.to_numeric(daily_df["total_acres"], errors="coerce").fillna(0).round(3)
-    daily_df["max_acres"] = pd.to_numeric(daily_df["max_acres"], errors="coerce").round(3)
+        results.extend(agg_df.to_dict(orient="records"))
 
-    daily_df = daily_df.astype(object).where(pd.notnull(daily_df), None)
+    final_df = pd.DataFrame(results)
 
-    logger.info("Transform complete. Output rows: %d", len(daily_df))
-    return daily_df.to_dict(orient="records")
+    final_df["avg_acres"] = pd.to_numeric(final_df["avg_acres"], errors="coerce").round(3)
+    final_df["total_acres"] = pd.to_numeric(final_df["total_acres"], errors="coerce").fillna(0).round(3)
+    final_df["max_acres"] = pd.to_numeric(final_df["max_acres"], errors="coerce").round(3)
+
+    final_df = final_df.astype(object).where(pd.notnull(final_df), None)
+
+    logger.info("Transform complete. Rows: %d", len(final_df))
+
+    return final_df.to_dict(orient="records")
 
 
 @task
@@ -386,7 +390,7 @@ def load(records: list[dict]) -> None:
 
 
 with DAG(
-    dag_id="nifc_fire_incremental",
+    dag_id="NIFC_Fire_incremental",
     description=(
         "Daily incremental wildfire ETL for Los Angeles, Fresno, and Riverside "
         "using the WFIGS real-time perimeter endpoint. Upserts into Snowflake."
@@ -399,7 +403,7 @@ with DAG(
         "retry_delay":      timedelta(minutes=5),
     },
     start_date=datetime(2026, 4, 27),
-    schedule="@daily",
+    schedule="30 3 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["ETL", "fire", "nifc", "incremental"],
@@ -423,6 +427,6 @@ with DAG(
         },
     ]
 
-    raw_records    = extract(cities)
-    clean_records  = transform(raw_records)
+    raw_records   = extract(cities)
+    clean_records = transform(raw_records)
     load(clean_records)

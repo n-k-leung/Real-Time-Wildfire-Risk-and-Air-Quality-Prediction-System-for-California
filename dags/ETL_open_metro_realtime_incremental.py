@@ -221,7 +221,7 @@ with DAG(
         {"name": "San Francisco", "lat": Variable.get("LATITUDE_SANFRANCISCO"), "lon": Variable.get("LONGITUDE_SANFRANCISCO")},
     ]
 
-    db = "user_db_coyote"
+    db = "user_db_groundhog"
     schema = "raw"
     table = "weather_data_proj"
 

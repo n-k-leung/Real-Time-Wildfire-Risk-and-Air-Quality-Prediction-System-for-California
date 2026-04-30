@@ -13,7 +13,7 @@ default_args = {
     "email": ["kazisaminamaraj.mumu@sjsu.edu"],
     "retries": 1,
     "retry_delay": timedelta(minutes=3),
-    "email_on_failure": False   # avoids SMTP crash
+    "email_on_failure": False
 }
 
 NIFC_QUERY_URL = (
@@ -22,8 +22,8 @@ NIFC_QUERY_URL = (
 )
 
 
-def return_snowflake_conn(con_id):
-    hook = SnowflakeHook(snowflake_conn_id=con_id)
+def get_cursor():
+    hook = SnowflakeHook(snowflake_conn_id="snowflake_con")
     return hook.get_conn().cursor()
 
 def get_nifc_historical(city_name, lat, lon, fire_year_start):
@@ -98,10 +98,10 @@ def extract(cities):
 
     return all_records
 
-
 @task
 def transform(records, ds=None):
 
+    # Airflow-safe ds handling
     today = datetime.strptime(ds, "%Y-%m-%d").date()
     cutoff_date = today - timedelta(days=5 * 365)
 
@@ -163,7 +163,7 @@ def load(records, db, schema, table):
     if not records:
         return
 
-    cur = return_snowflake_conn()
+    cur = get_cursor()
 
     try:
         cur.execute("BEGIN")
@@ -244,9 +244,9 @@ with DAG(
         },
     ]
 
-    db = "user_db_coyote"
+    db = "user_db_groundhog"
     schema = "raw"
-    table = "nifc_fire_historical_proj"
+    table = "nifc_fire_proj"
 
     raw = extract(cities)
     clean = transform(raw)

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 SNOWFLAKE_CONN_ID = "snowflake_default"
 
-SOURCE_DB = "user_db_coyote"
+SOURCE_DB = "USER_DB_GROUNDHOG"
 SOURCE_SCHEMA = "raw"
 SOURCE_TABLE = "nifc_fire_proj"
 
@@ -78,7 +78,7 @@ def forecast(history: list[dict], ds: str) -> list[dict]:
         logger.warning("No historical rows found; forecast output is empty.")
         return []
 
-    run_date = datetime.strptime(ds, "%Y-%m-%d").date()
+    run_date = datetime.utcnow().date()
     horizon_days = 90
     forecast_end = run_date + timedelta(days=horizon_days)
 
@@ -256,7 +256,7 @@ with DAG(
     dag_id="nifc_fire_forecast",
     description="Builds daily wildfire forecast table in analytics schema.",
     start_date=datetime(2026, 4, 30),
-    schedule="@daily",
+    schedule="45 3 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["ETL", "fire", "forecast", "analytics"],

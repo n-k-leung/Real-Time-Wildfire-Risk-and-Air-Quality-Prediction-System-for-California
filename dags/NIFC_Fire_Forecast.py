@@ -20,7 +20,7 @@ SOURCE_TABLE = "nifc_fire_proj"
 
 TARGET_DB = "USER_DB_GROUNDHOG"
 TARGET_SCHEMA = "analytics"
-TARGET_TABLE = "nifc_fire_forecast_proj"
+TARGET_TABLE = "nifc_fire_forecast_updated"
 COMBINED_VIEW = "nifc_fire_actual_and_forecast"
 
 DEFAULT_ARGS = {
@@ -52,6 +52,33 @@ def safe_mode(series: pd.Series):
     return mode.iloc[0] if not mode.empty else None
 
 
+def _date_one_year_ago(d: date) -> date:
+    try:
+        return d.replace(year=d.year - 1)
+    except ValueError:
+        return d.replace(year=d.year - 1, month=2, day=28)
+
+
+def _yoy_level_scale(work: pd.DataFrame, value_col: str, run_date: date, window_days: int = 90) -> float:
+    """Recent level vs same calendar window one year earlier (bounded)."""
+    w = work[work["date"] <= run_date].sort_values("date")
+    if w.empty:
+        return 1.0
+    end = run_date
+    start = run_date - timedelta(days=window_days)
+    cur = w[(w["date"] > start) & (w["date"] <= end)][value_col]
+    prev_end = _date_one_year_ago(end)
+    prev_start = prev_end - timedelta(days=window_days)
+    prev = w[(w["date"] > prev_start) & (w["date"] <= prev_end)][value_col]
+    cur_m = float(cur.mean()) if len(cur) else 0.0
+    prev_m = float(prev.mean()) if len(prev) else 0.0
+    if prev_m > 1e-6:
+        return float(np.clip(cur_m / prev_m, 0.5, 1.5))
+    if cur_m > 0:
+        return 1.15
+    return 1.0
+
+
 def build_numeric_forecast(
     city_df: pd.DataFrame,
     value_col: str,
@@ -59,45 +86,58 @@ def build_numeric_forecast(
     future_dates: list[date],
 ) -> dict[date, float]:
     """
-    Forecast a numeric signal with seasonal profile + recent trend:
-    - Seasonal baseline from day-of-year averages over the recent 2 years
-    - Linear trend from last 180 days
+    Per-city numeric forecast for a one-year horizon:
+    - Day-of-year profile: mean by DOY across all history up to run_date (captures seasonality).
+    - Calendar-month blend: previous calendar year's monthly mean vs multi-year monthly mean.
+    - YoY momentum: bounded scale from recent window vs same window one year ago.
     """
     work = city_df[["date", value_col]].copy()
     work[value_col] = pd.to_numeric(work[value_col], errors="coerce").fillna(0.0)
+    work["date"] = pd.to_datetime(work["date"]).dt.date
+    work = work[work["date"] <= run_date]
 
     if work.empty:
         return {d: 0.0 for d in future_dates}
 
     work["doy"] = pd.to_datetime(work["date"]).dt.dayofyear
-    work["series_day_idx"] = (pd.to_datetime(work["date"]) - pd.Timestamp(run_date)).dt.days
+    work["month"] = pd.to_datetime(work["date"]).dt.month
+    work["year"] = pd.to_datetime(work["date"]).dt.year
 
-    seasonal_lookup = (
-        work.groupby("doy")[value_col]
-        .mean()
-        .to_dict()
+    default_level = float(work[value_col].mean())
+    doy_lookup = work.groupby("doy", observed=True)[value_col].mean().to_dict()
+    month_all = work.groupby("month", observed=True)[value_col].mean().to_dict()
+
+    prev_cal_year = run_date.year - 1
+    prev_year_mask = work["year"] == prev_cal_year
+    month_prev_year = (
+        work.loc[prev_year_mask].groupby("month", observed=True)[value_col].mean().to_dict()
+        if prev_year_mask.any()
+        else {}
     )
-    default_level = float(work[value_col].mean()) if len(work) else 0.0
 
-    trend_df = work.sort_values("date").tail(180)
-    x = trend_df["series_day_idx"].to_numpy(dtype=float)
-    y = trend_df[value_col].to_numpy(dtype=float)
+    level_scale = _yoy_level_scale(work, value_col, run_date, window_days=90)
 
-    if len(trend_df) >= 2 and not np.allclose(x, x[0]):
-        slope, intercept = np.polyfit(x, y, 1)
-    else:
-        slope, intercept = 0.0, default_level
-
-    trend_weight = 0.35
-    seasonal_weight = 0.65
+    # Within-month shape vs month level (stabilizes daily path inside the month).
+    month_level = work.groupby("month", observed=True)[value_col].transform("mean")
+    work["_rel"] = np.where(
+        month_level > 1e-9,
+        work[value_col] / month_level,
+        1.0,
+    )
+    doy_rel = work.groupby("doy", observed=True)["_rel"].mean().to_dict()
 
     out: dict[date, float] = {}
     for d in future_dates:
+        m = d.month
         doy = d.timetuple().tm_yday
-        seasonal_part = float(seasonal_lookup.get(doy, default_level))
-        day_idx = float((d - run_date).days)
-        trend_part = float(slope * day_idx + intercept)
-        pred = seasonal_weight * seasonal_part + trend_weight * trend_part
+        m_hist = float(month_all.get(m, default_level))
+        m_prev_y = float(month_prev_year.get(m, m_hist))
+        month_blend = 0.55 * m_prev_y + 0.45 * m_hist
+        doy_base = float(doy_lookup.get(doy, month_blend))
+        rel = float(doy_rel.get(doy, 1.0))
+        shaped = float(np.clip(rel, 0.25, 4.0)) * month_blend
+        raw = 0.5 * doy_base + 0.5 * shaped
+        pred = raw * level_scale
         out[d] = round(max(pred, 0.0), 3)
 
     return out
@@ -142,7 +182,7 @@ def forecast(history: list[dict], ds: str) -> list[dict]:
         return []
 
     run_date = datetime.strptime(ds, "%Y-%m-%d").date()
-    horizon_days = 90
+    horizon_days = 365
     forecast_end = run_date + timedelta(days=horizon_days)
 
     df = pd.DataFrame(history)
@@ -153,8 +193,8 @@ def forecast(history: list[dict], ds: str) -> list[dict]:
     df["max_acres"] = pd.to_numeric(df["max_acres"], errors="coerce").fillna(0)
     df = df.dropna(subset=["city", "date"])
 
-    # Keep only the most recent 24 months as signal for short-horizon forecasting.
-    recent_cutoff = run_date - timedelta(days=730)
+    # Keep several years of history for YoY and monthly seasonal baselines (one-year horizon).
+    recent_cutoff = run_date - timedelta(days=1460)
     df = df[df["date"] >= recent_cutoff]
 
     if df.empty:
@@ -214,7 +254,7 @@ def forecast(history: list[dict], ds: str) -> list[dict]:
                     "max_acres": max_acres_forecast[f_date],
                     "most_common_incident": cat["most_common_incident"],
                     "most_common_agency": cat["most_common_agency"],
-                    "most_common_source": cat["most_common_source"] or "forecast_seasonal_trend",
+                    "most_common_source": cat["most_common_source"],
                     "is_forecast": True,
                     "horizon_day": idx,
                     "forecast_generated_at": run_date,

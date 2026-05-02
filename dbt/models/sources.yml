@@ -1,0 +1,32 @@
+version: 2
+
+sources:
+  - name: raw
+    database: USER_DB_GROUNDHOG
+    schema: raw
+    description: "Schema which stores raw tables from ETL"
+    tables:
+      - name: weather_data_proj
+        identifier: weather_data_proj
+      - name: aqi_data_proj
+        identifier: aqi_data_proj
+      - name: nifc_fire_proj
+        identifier: nifc_fire_proj
+      - name: historical_transform
+        identifier: historical_transform
+      - name: forecasting_transform
+        identifier: forecasting_transform
+  - name: analytics
+    database: USER_DB_GROUNDHOG
+    schema: analytics
+    description: "Schema with stores analytics tables (ELT)"
+    tables:
+    - name: historical_analytics
+      identifier: historical_analytics
+      description: "historical_analytics Analysis"
+    - name: forecasting_analytics
+      identifier: forecasting_analytics
+      description: "forecasting_analytics Analysis"
+    - name: realtime_analytics
+      identifier: realtime_analytics
+      description: "realtime_analytics"

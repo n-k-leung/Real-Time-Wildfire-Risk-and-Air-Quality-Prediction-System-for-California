@@ -1,0 +1,134 @@
+version: 2
+
+models:
+
+  # ── Transform ─────────────────────────────────────────────
+
+  - name: historical_transform
+    description: "Base transform layer with derived columns"
+    columns:
+      - name: city
+        data_tests:
+          - not_null
+
+      - name: date
+        data_tests:
+          - not_null
+
+      - name: temp_max
+        data_tests:
+          - not_null
+
+      - name: temp_mean
+        data_tests:
+          - not_null
+
+      - name: temp_min
+        data_tests:
+          - not_null
+
+      - name: precipitation_sum
+        data_tests:
+          - not_null
+
+      - name: weather_code
+        data_tests:
+          - not_null
+
+      - name: season
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['Winter', 'Spring', 'Summer', 'Fall']
+
+    tests:
+    - dbt_utils.unique_combination_of_columns:
+        combination_of_columns: [city, date]
+
+  - name: forecasting_transform
+    description: "Base transform layer with derived columns"
+    columns:
+      - name: city
+        data_tests:
+          - not_null
+
+      - name: date
+        data_tests:
+          - not_null
+
+      - name: temp_max
+        data_tests:
+          - not_null
+
+      - name: temp_mean
+        data_tests:
+          - not_null
+
+      - name: temp_min
+        data_tests:
+          - not_null
+
+      - name: precipitation_sum
+        data_tests:
+          - not_null
+
+      - name: weather_code
+        data_tests:
+          - not_null
+
+      - name: season
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: ['Winter', 'Spring', 'Summer', 'Fall']
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [city, date]
+
+  # ── Analytics ─────────────────────────────────────────────
+
+  - name: historical_analytics
+    description: "histrorical trends"
+    columns:
+      - name: city
+        data_tests:
+          - not_null
+
+      - name: date
+        data_tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [city, date]
+
+  - name: forecasting_analytics
+    description: "forecasting 1 year trends"
+    columns:
+      - name: city
+        data_tests:
+          - not_null
+
+      - name: date
+        data_tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [city, date]
+
+  - name: realtime_analytics
+    description: "real time analytics"
+    columns:
+      - name: city
+        data_tests:
+          - not_null
+
+      - name: date
+        data_tests:
+          - not_null
+
+    tests:
+      - dbt_utils.unique_combination_of_columns:
+          combination_of_columns: [city, date]

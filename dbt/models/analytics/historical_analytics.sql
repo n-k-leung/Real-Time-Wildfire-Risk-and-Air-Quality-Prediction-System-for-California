@@ -36,7 +36,21 @@ enriched AS (
             WHEN COALESCE(b.incident_count, 0) >= 5 OR COALESCE(b.total_acres, 0) >= 100 THEN 'High'
             WHEN COALESCE(b.incident_count, 0) >= 2 OR COALESCE(b.total_acres, 0) >= 50 THEN 'Medium'
             ELSE 'Lower'
-        END AS daily_impact_tier
+        END AS daily_impact_tier,
+
+        -- Running count of days (for this city) with this AQI parameter value through this date
+        COUNT(*) OVER (
+            PARTITION BY b.city, COALESCE(b.parameter, '__NONE__')
+            ORDER BY b.date
+            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS days_in_aqi_parameter_type,
+
+        -- Composite 0–100: incident pressure + scaled burned area (same spirit as wildfire_risk_score)
+        LEAST(
+            100,
+            COALESCE(b.incident_count, 0) * 2
+            + LEAST(50, COALESCE(b.total_acres, 0) / 10)
+        ) AS area_incident_impact_score
     FROM base b
 )
 
@@ -59,6 +73,7 @@ SELECT
 
     e.avg_aqi,
     e.parameter AS aqi_parameter,
+    e.days_in_aqi_parameter_type,
     e.aqi_label,
     e.site_name,
 
@@ -70,6 +85,7 @@ SELECT
     e.most_common_agency,
     e.most_common_source,
     e.wildfire_risk_score,
+    e.area_incident_impact_score,
 
     e.abnormal_day_uv,
     e.abnormal_day_temp_max,

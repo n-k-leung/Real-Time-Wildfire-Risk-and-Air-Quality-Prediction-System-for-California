@@ -14,4 +14,4 @@ latest_day AS (
 SELECT b.*
 FROM base b
 JOIN latest_day l
-    ON b.date = l.latest_date;
+    ON b.date = l.latest_date

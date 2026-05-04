@@ -64,7 +64,7 @@ aqi_base AS (
             ELSE 'Hazardous'
         END AS aqi_label
     FROM {{ source('raw', 'aqi_data_proj') }}
-    GROUP BY city, date
+    GROUP BY city, date, site_name, parameter
 ),
 
 fire_base AS (

@@ -30,3 +30,7 @@ sources:
     - name: realtime_analytics
       identifier: realtime_analytics
       description: "realtime_analytics"
+    - name: AQI_FORECAST_WITH_PARAMETER
+      identifier: AQI_FORECAST_WITH_PARAMETER
+    - name: nifc_fire_forecast
+      identifier: nifc_fire_forecast

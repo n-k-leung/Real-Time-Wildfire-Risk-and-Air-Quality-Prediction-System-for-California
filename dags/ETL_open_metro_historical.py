@@ -4,6 +4,8 @@ from airflow.decorators import task
 from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 from datetime import timedelta, datetime, date
 import requests
+import time
+
 
 default_args = {
     'owner': 'natleung',
@@ -12,64 +14,98 @@ default_args = {
     'retry_delay': timedelta(minutes=3),
 }
 
+
 def return_snowflake_conn(con_id):
     hook = SnowflakeHook(snowflake_conn_id=con_id)
     conn = hook.get_conn()
     return conn.cursor()
+# doing individual leads to 429 error so add delay
+def safe_request(url, params, retries=5):
+    delay = 5
 
-# Extract task now handles multiple cities
+    for _ in range(retries):
+        response = requests.get(url, params=params)
+
+        if response.status_code == 200:
+            return response
+
+        if response.status_code == 429:
+            time.sleep(delay)
+            delay *= 2
+            continue
+
+        raise RuntimeError(
+            f"API request failed: {response.status_code} -> {response.text[:200]}"
+        )
+
+    raise RuntimeError("Too many 429 retries from API")
+
 @task
 def extract(cities):
     all_city_data = []
     url = "https://archive-api.open-meteo.com/v1/archive"
 
-    # end_date = date.today()
-    # start_date = end_date - timedelta(days=30)
+    end_date = date.today() - timedelta(days=1)
+    total_days = 365 * 5
 
     for city in cities:
-        params = {
-            "latitude": city["lat"],
-            "longitude": city["lon"],
-            "past_days": 365,
-            "forecast_days": 0,
-            "daily": [
-                "temperature_2m_max",
-                "temperature_2m_mean",
-                "temperature_2m_min",
-                "apparent_temperature_max",
-                "apparent_temperature_mean",
-                "apparent_temperature_min",
-                "precipitation_sum",
-                "rain_sum",
-                "precipitation_hours",
-                "precipitation_probability_max",
-                "precipitation_probability_mean",
-                "precipitation_probability_min",
-                "weather_code",
-                "wind_speed_10m_max",
-                "wind_direction_10m_dominant",
-                "uv_index_max",
-                "uv_index_clear_sky_max",
-            ],
-            "timezone": "America/Los_Angeles"
-        }
-        response = requests.get(url, params=params)
-        if response.status_code != 200:
-            raise RuntimeError(f"API request failed for {city['name']}: {response.status_code}")
-        
-        all_city_data.append({
+        city_data = {
             "city": city["name"],
             "latitude": city["lat"],
             "longitude": city["lon"],
-            "daily": response.json().get("daily", {})
-        })
-    
+            "daily": {}
+        }
+        # take in chuncks to avoid 429 error
+        for offset in range(0, total_days, 365):
+            chunk_end = end_date - timedelta(days=offset)
+            chunk_start = chunk_end - timedelta(days=364)
+
+            params = {
+                "latitude": city["lat"],
+                "longitude": city["lon"],
+                "start_date": chunk_start.isoformat(),
+                "end_date": chunk_end.isoformat(),
+                "daily": [
+                    "temperature_2m_max",
+                    "temperature_2m_mean",
+                    "temperature_2m_min",
+                    "apparent_temperature_max",
+                    "apparent_temperature_mean",
+                    "apparent_temperature_min",
+                    "precipitation_sum",
+                    "rain_sum",
+                    "precipitation_hours",
+                    "precipitation_probability_max",
+                    "precipitation_probability_mean",
+                    "precipitation_probability_min",
+                    "weather_code",
+                    "wind_speed_10m_max",
+                    "wind_direction_10m_dominant",
+                    "uv_index_max",
+                    "uv_index_clear_sky_max",
+                ],
+                "timezone": "America/Los_Angeles"
+            }
+
+            response = safe_request(url, params)
+            chunk = response.json().get("daily", {})
+
+            if not city_data["daily"]:
+                city_data["daily"] = chunk
+            else:
+                for k, v in chunk.items():
+                    city_data["daily"].setdefault(k, []).extend(v)
+
+            time.sleep(1.5)
+
+        all_city_data.append(city_data)
+
     return all_city_data
 
-# Transform task now takes the whole list from extract
 @task
 def transform(all_city_data):
     all_records = []
+
     for city_data in all_city_data:
         daily = city_data["daily"]
         city_name = city_data["city"]
@@ -95,18 +131,21 @@ def transform(all_city_data):
                 "precipitation_probability_min": daily["precipitation_probability_min"][i],
                 "weather_code": daily["weather_code"][i],
                 "wind_speed_10m_max": daily["wind_speed_10m_max"][i],
+                "wind_direction_10m_dominant": daily["wind_direction_10m_dominant"][i],
                 "uv_index_max": daily["uv_index_max"][i],
                 "uv_index_clear_sky_max": daily["uv_index_clear_sky_max"][i],
                 "city": city_name,
             })
+
     return all_records
 
 @task
 def load(con, target_table, records):
     try:
         con.execute("BEGIN;")
+
         con.execute(f"""
-            CREATE TABLE IF NOT EXISTS {target_table} (
+            CREATE OR REPLACE TABLE {target_table} (
                 latitude FLOAT,
                 longitude FLOAT,
                 date DATE,
@@ -124,37 +163,64 @@ def load(con, target_table, records):
                 precipitation_probability_min FLOAT,
                 weather_code VARCHAR(3),
                 wind_speed_10m_max FLOAT,
+                wind_direction_10m_dominant FLOAT,
                 uv_index_max FLOAT,
                 uv_index_clear_sky_max FLOAT,
                 city VARCHAR(100),
                 PRIMARY KEY (latitude, longitude, date, city)
             );
         """)
+
         con.execute(f"DELETE FROM {target_table};")
 
         insert_sql = f"""
             INSERT INTO {target_table} (
-                latitude, longitude, date, temp_max, temp_mean, temp_min, apparent_temp_max, apparent_temp_mean, apparent_temp_min, precipitation_sum, rain_sum,
-                precipitation_hours, precipitation_probability_max, precipitation_probability_mean, precipitation_probability_min, weather_code, wind_speed_10m_max, uv_index_max, uv_index_clear_sky_max, city
+                latitude, longitude, date, temp_max, temp_mean, temp_min,
+                apparent_temp_max, apparent_temp_mean, apparent_temp_min,
+                precipitation_sum, rain_sum,
+                precipitation_hours,
+                precipitation_probability_max,
+                precipitation_probability_mean,
+                precipitation_probability_min,
+                weather_code,
+                wind_speed_10m_max,
+                wind_direction_10m_dominant,
+                uv_index_max,
+                uv_index_clear_sky_max,
+                city
             ) VALUES (
-                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
             );
         """
+
         data = [
             (
-                r["latitude"], r["longitude"], r["date"], r["temp_max"], r["temp_mean"], r["temp_min"], r["apparent_temp_max"], r["apparent_temp_mean"], r["apparent_temp_min"], r["precipitation_sum"], r["rain_sum"],
-                r["precipitation_hours"], r["precipitation_probability_max"], r["precipitation_probability_mean"], r["precipitation_probability_min"], r["weather_code"], r["wind_speed_10m_max"], r["uv_index_max"], r["uv_index_clear_sky_max"],r["city"],
+                r["latitude"], r["longitude"], r["date"],
+                r["temp_max"], r["temp_mean"], r["temp_min"],
+                r["apparent_temp_max"], r["apparent_temp_mean"], r["apparent_temp_min"],
+                r["precipitation_sum"], r["rain_sum"],
+                r["precipitation_hours"],
+                r["precipitation_probability_max"],
+                r["precipitation_probability_mean"],
+                r["precipitation_probability_min"],
+                r["weather_code"],
+                r["wind_speed_10m_max"],
+                r["wind_direction_10m_dominant"],
+                r["uv_index_max"],
+                r["uv_index_clear_sky_max"],
+                r["city"],
             )
             for r in records
         ]
 
         con.executemany(insert_sql, data)
         con.execute("COMMIT;")
-        print(f"Loaded {len(data)} records into {target_table}")
+
+        print(f"Loaded {len(records)} records into {target_table}")
+
     except Exception as e:
         con.execute("ROLLBACK;")
-        print(e)
-        raise
+        raise e
 
 with DAG(
     dag_id='WeatherData_Historical',

@@ -1,4 +1,4 @@
-{% snapshot snapshot_precipitation_analysis %}
+{% snapshot snapshot_historical_analytics %}
 {{
     config(
         target_schema='snapshot',
@@ -12,5 +12,5 @@
 SELECT
     *,
     CAST(date AS TIMESTAMP_NTZ) AS updated_at_ts
-FROM {{ ref('precipitation_analysis') }}
+FROM {{ ref('historical_analytics') }}
 {% endsnapshot %}

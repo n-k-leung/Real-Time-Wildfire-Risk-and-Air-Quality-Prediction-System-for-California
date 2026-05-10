@@ -1,16 +1,43 @@
 WITH fire_forecast AS (
     SELECT *
-    FROM {{ source('analytics', 'nifc_fire_forecast_updated') }}
+    FROM (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (
+                PARTITION BY city, date
+                ORDER BY forecast_generated_at DESC
+            ) AS fire_rn
+        FROM {{ source('analytics', 'nifc_fire_forecast_updated') }}
+    )
+    WHERE fire_rn = 1
 ),
 
 aqi_forecast AS (
     SELECT *
-    FROM {{ source('analytics', 'aqi_forecast_with_parameter') }}
+    FROM (
+        SELECT
+            *,
+            ROW_NUMBER() OVER (
+                PARTITION BY city, date, parameter
+                ORDER BY forecast_generated_at DESC
+            ) AS aqi_rn
+        FROM {{ source('analytics', 'aqi_forecast_with_parameter') }}
+    )
+    WHERE aqi_rn = 1
 ),
 
 joined AS (
     SELECT
-        f.*,
+        f.city,
+        f.date,
+        f.incident_count,
+        f.total_acres,
+        f.avg_acres,
+        f.max_acres,
+        f.most_common_incident,
+        f.most_common_agency,
+        f.most_common_source,
+        f.forecast_generated_at AS wildfire_forecast_generated_at,
 
         a.aqi,
         a.parameter AS aqi_parameter,

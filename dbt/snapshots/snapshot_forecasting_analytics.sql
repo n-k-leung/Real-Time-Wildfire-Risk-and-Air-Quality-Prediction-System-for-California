@@ -2,15 +2,16 @@
 {{
     config(
         target_schema='snapshot',
-        unique_key="city || '-' || CAST(date AS VARCHAR)",
+        unique_key="city || '-' || CAST(date AS VARCHAR) || '-' || COALESCE(aqi_parameter, 'UNKNOWN')",
         strategy='timestamp',
-        updated_at='date',
+        updated_at='updated_at_ts',
         invalidate_hard_deletes=True
     )
 }}
--- did cast because warning for:  Data type of snapshot table timestamp columns (TIMESTAMP_NTZ) doesn't match derived column 'updated_at' (DATE). Please update snapshot config 'updated_at'.
+
 SELECT
     *,
     CAST(date AS TIMESTAMP_NTZ) AS updated_at_ts
-FROM {{ ref('forecasting_analytics') }}
+FROM {{ ref('forecast_analytics') }}
+
 {% endsnapshot %}

@@ -7,12 +7,16 @@ import requests
 import time
 
 
+
+
 default_args = {
     'owner': 'natleung',
     'email': ['natalie.leung@sjsu.com'],
     'retries': 1,
     'retry_delay': timedelta(minutes=3),
 }
+
+
 
 
 def return_snowflake_conn(con_id):
@@ -23,30 +27,38 @@ def return_snowflake_conn(con_id):
 def safe_request(url, params, retries=5):
     delay = 5
 
+
     for _ in range(retries):
         response = requests.get(url, params=params)
 
+
         if response.status_code == 200:
             return response
+
 
         if response.status_code == 429:
             time.sleep(delay)
             delay *= 2
             continue
 
+
         raise RuntimeError(
             f"API request failed: {response.status_code} -> {response.text[:200]}"
         )
 
+
     raise RuntimeError("Too many 429 retries from API")
+
 
 @task
 def extract(cities):
     all_city_data = []
     url = "https://archive-api.open-meteo.com/v1/archive"
 
+
     end_date = date.today() - timedelta(days=1)
     total_days = 365 * 5
+
 
     for city in cities:
         city_data = {
@@ -59,6 +71,7 @@ def extract(cities):
         for offset in range(0, total_days, 365):
             chunk_end = end_date - timedelta(days=offset)
             chunk_start = chunk_end - timedelta(days=364)
+
 
             params = {
                 "latitude": city["lat"],
@@ -87,8 +100,10 @@ def extract(cities):
                 "timezone": "America/Los_Angeles"
             }
 
+
             response = safe_request(url, params)
             chunk = response.json().get("daily", {})
+
 
             if not city_data["daily"]:
                 city_data["daily"] = chunk
@@ -96,21 +111,27 @@ def extract(cities):
                 for k, v in chunk.items():
                     city_data["daily"].setdefault(k, []).extend(v)
 
+
             time.sleep(1.5)
+
 
         all_city_data.append(city_data)
 
+
     return all_city_data
+
 
 @task
 def transform(all_city_data):
     all_records = []
+
 
     for city_data in all_city_data:
         daily = city_data["daily"]
         city_name = city_data["city"]
         lat = city_data["latitude"]
         lon = city_data["longitude"]
+
 
         for i in range(len(daily.get("time", []))):
             all_records.append({
@@ -137,12 +158,15 @@ def transform(all_city_data):
                 "city": city_name,
             })
 
+
     return all_records
+
 
 @task
 def load(con, target_table, records):
     try:
         con.execute("BEGIN;")
+
 
         con.execute(f"""
             CREATE OR REPLACE TABLE {target_table} (
@@ -171,7 +195,9 @@ def load(con, target_table, records):
             );
         """)
 
+
         con.execute(f"DELETE FROM {target_table};")
+
 
         insert_sql = f"""
             INSERT INTO {target_table} (
@@ -193,6 +219,7 @@ def load(con, target_table, records):
             );
         """
 
+
         data = [
             (
                 r["latitude"], r["longitude"], r["date"],
@@ -213,14 +240,18 @@ def load(con, target_table, records):
             for r in records
         ]
 
+
         con.executemany(insert_sql, data)
         con.execute("COMMIT;")
 
+
         print(f"Loaded {len(records)} records into {target_table}")
+
 
     except Exception as e:
         con.execute("ROLLBACK;")
         raise e
+
 
 with DAG(
     dag_id='WeatherData_Historical',
@@ -231,14 +262,17 @@ with DAG(
     schedule=None
 ) as dag:
 
+
     cities = [
         {"name": "Los Angeles", "lat": Variable.get("LATITUDE_LOSANGELES"), "lon": Variable.get("LONGITUDE_LOSANGELES")},
         {"name": "Fresno", "lat": Variable.get("LATITUDE_FRESNO"), "lon": Variable.get("LONGITUDE_FRESNO")},
         {"name": "Riverside", "lat": Variable.get("LATITUDE_RIVERSIDE"), "lon": Variable.get("LONGITUDE_RIVERSIDE")},
     ]
 
+
     target_table = "raw.weather_data_proj"
     cur = return_snowflake_conn("snowflake_con")
+
 
     raw_data = extract(cities)
     transformed_data = transform(raw_data)

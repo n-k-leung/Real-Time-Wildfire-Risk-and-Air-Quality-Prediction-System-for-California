@@ -12,9 +12,9 @@ from airflow.providers.snowflake.hooks.snowflake import SnowflakeHook
 
 logger = logging.getLogger(__name__)
 
-SNOWFLAKE_CONN_ID = "snowflake_default"
+SNOWFLAKE_CONN_ID = "snowflake_con"
 
-SOURCE_DB = "user_db_coyote"
+SOURCE_DB = "USER_DB_GROUNDHOG"
 SOURCE_SCHEMA = "raw"
 SOURCE_TABLE = "nifc_fire_proj"
 
@@ -386,7 +386,7 @@ with DAG(
     dag_id="nifc_fire_forecast",
     description="Builds daily wildfire forecast table in analytics schema.",
     start_date=pendulum.now("America/Los_Angeles"),
-    schedule="@daily",
+    schedule="45 3 * * *",
     catchup=False,
     max_active_runs=1,
     tags=["ETL", "fire", "forecast", "analytics"],

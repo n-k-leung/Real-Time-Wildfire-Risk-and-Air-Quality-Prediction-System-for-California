@@ -23,7 +23,8 @@ with DAG(
     catchup=False,
     default_args={
         "owner": "natleung",
-        "email": ["natalie.leung@sjsu.com"],
+        "email": ["natalie.leung@sjsu.edu"],
+        "email_on_failure": False,
         "retries": 1,
         "env": {
             "DBT_USER": conn.login,

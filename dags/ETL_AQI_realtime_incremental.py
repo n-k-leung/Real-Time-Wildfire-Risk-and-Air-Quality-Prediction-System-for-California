@@ -132,7 +132,7 @@ with DAG(
 
     db = "user_db_groundhog"
     schema = "raw"
-    table = "aqi_proj"
+    table = "aqi_data_proj"
 
     raw = extract(cities)
     clean = transform(raw)

@@ -1,8 +1,8 @@
 # Real Time Wildfire Risk and Air Quality Prediction System for California 
 
-California has seen a spike of frequent wildfires because most areas experience dry climate. This has significantly impacted the air quality and residents’ public health. We noticed that in reports of wildfire that they mention the AQI along with how weather is seen to affect the severity of wildfires. We hoped to support the claim that there is a relationship between all three aspects in this project. In addition, we aim to build a system to help forecast wildfires in order to alert residents beforehand. This would aid in getting people to safety early on to prevent unfortunate accidents. These forecastings are also useful to first aid responders and make them aware of areas that may start to have wildfires as well.
+A two-stage predictive analytics system for **Los Angeles, Fresno, and Riverside** that (1) forecasts wildfire activity from historical wildfires and weather, then (2) feeds those wildfire forecasts together with weather and air-quality observations into an AQI forecast. Everything is wired through **Snowflake, Apache Airflow, and dbt**, with the results surfaced in a **Preset dashboard** covering wildfire risk, AQI forecasts, and environmental conditions across California.
 
-This project focuses on three main cities where wildfire has commonly occurred in the past couple of years. The cities are Los Angeles, Fresno, and Riverside. We are limiting it to three cities for a better focus. This project aims to develop a two stage predictive analytics system that first forecasts wildfire occurrence based on weather conditions and historical wildfire data. It then uses the predicted real-time wildfire activity forecast, weather, and air quality observations to predict the AQI levels. The system integrates both historical and real-time datasets to build a cloud-based data warehouse, data pipelines, and transformations using Snowflake, Apache Airflow, and dbt. The results will be displayed in a Preset dashboard that visualizes wildfire risk, AQI forecasts, and the environmental conditions across California counties. This will support environmental monitoring and provide wildfire warnings.
+The motivation: California's increasingly dry climate has driven a spike in wildfires, and those wildfires visibly degrade air quality and public health. Wildfire reports already lean on AQI and weather signals to describe severity, so we wanted to make that relationship explicit and use it to give residents and first responders a usable early-warning view.
 
 ## What it does
 
@@ -17,30 +17,15 @@ Cities in scope: **Los Angeles, Fresno, Riverside**.
 
 ## Architecture
 
-```
-                ┌────────────────────────────┐
-   AirNow ────► │                            │
-   Open-Meteo ►│   Airflow DAGs (ETL/ELT)   │── writes ──► Snowflake.raw
-   NIFC ──────► │                            │
-                └─────────────┬──────────────┘
-                              │
-                              ▼
-                ┌────────────────────────────┐
-                │  Forecast DAGs (pandas)    │── writes ──► Snowflake.analytics
-                │  - NIFC_Fire_Forecast      │              (forecast tables)
-                │  - aqi_forecast_with_param │
-                └─────────────┬──────────────┘
-                              │
-                              ▼
-                ┌────────────────────────────┐
-                │  build_elt_with_dbt DAG    │
-                │  dbt run → test → snapshot │
-                └─────────────┬──────────────┘
-                              │
-                              ▼
-                Snowflake.analytics + Snowflake.snapshot
-                (historical / forecast / realtime models)
-```
+![Wildfire Analytics Pipeline — System Architecture](docs/architecture.png)
+
+## Dashboard
+
+The final analytics layer is surfaced through a **Preset (Apache Superset)** dashboard covering historical, real-time, and forecasted wildfire and AQI views.
+
+**[Open the live dashboard →](https://c7d5b8eb.us2a.app.preset.io/superset/dashboard/9/?native_filters_key=gkzrUD01yaM&standalone=1)**
+
+![Realtime Analysis Dashboard](docs/Realtime_Analysis.png)
 
 ## Stack
 

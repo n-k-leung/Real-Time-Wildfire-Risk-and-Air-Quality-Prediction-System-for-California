@@ -31,7 +31,7 @@ The final analytics layer is surfaced through **Preset (Apache Superset)** dashb
 
 ### Wildfire & AQI Forecast
 
-**[Open the live dashboard →](<ADD_FORECAST_DASHBOARD_URL>)**
+**[Open the live dashboard →](https://bf1a2693.us2a.app.preset.io/superset/dashboard/12/?native_filters_key=C3TWozygJvY)**
 
 ![Wildfire & AQI Forecast Dashboard](docs/Wildfire_AQI_Forecast_Dashboard.png)
 

@@ -1,8 +1,8 @@
-# Real-Time Wildfire Risk and Air Quality Prediction System for California
+# Real Time Wildfire Risk and Air Quality Prediction System for California 
 
-A small data platform that pulls weather, air quality, and wildfire data for a handful of California cities, lands everything in Snowflake, and uses dbt to turn it into something you can actually query, forecast on, and visualize.
+California has seen a spike of frequent wildfires because most areas experience dry climate. This has significantly impacted the air quality and residents’ public health. We noticed that in reports of wildfire that they mention the AQI along with how weather is seen to affect the severity of wildfires. We hoped to support the claim that there is a relationship between all three aspects in this project. In addition, we aim to build a system to help forecast wildfires in order to alert residents beforehand. This would aid in getting people to safety early on to prevent unfortunate accidents. These forecastings are also useful to first aid responders and make them aware of areas that may start to have wildfires as well.
 
-It's a course project for SJSU DATA 226, but it's wired up like a real ELT stack — Airflow on top, Snowflake in the middle, dbt doing the modeling, and a few simple forecasting jobs at the end.
+This project focuses on three main cities where wildfire has commonly occurred in the past couple of years. The cities are Los Angeles, Fresno, and Riverside. We are limiting it to three cities for a better focus. This project aims to develop a two stage predictive analytics system that first forecasts wildfire occurrence based on weather conditions and historical wildfire data. It then uses the predicted real-time wildfire activity forecast, weather, and air quality observations to predict the AQI levels. The system integrates both historical and real-time datasets to build a cloud-based data warehouse, data pipelines, and transformations using Snowflake, Apache Airflow, and dbt. The results will be displayed in a Preset dashboard that visualizes wildfire risk, AQI forecasts, and the environmental conditions across California counties. This will support environmental monitoring and provide wildfire warnings.
 
 ## What it does
 
@@ -13,7 +13,7 @@ It's a course project for SJSU DATA 226, but it's wired up like a real ELT stack
   - AQI per pollutant parameter, driven by the wildfire forecast and recent weather.
 - Models everything in dbt into a **transform → analytics → snapshot** stack with tests on every grain.
 
-Cities currently in scope: **Los Angeles, Fresno, Riverside** (with Cupertino / San Jose / San Francisco wired up in the env for easy extension).
+Cities in scope: **Los Angeles, Fresno, Riverside**.
 
 ## Architecture
 
@@ -50,6 +50,7 @@ Cities currently in scope: **Los Angeles, Fresno, Riverside** (with Cupertino / 
 | Warehouse          | Snowflake                                              |
 | Transform / ELT    | dbt (`build_mau` project, with `dbt_utils`)            |
 | Forecasting        | Python — pandas, numpy (no heavy ML, just signals)     |
+| Visualization      | Preset (Apache Superset)                               |
 | External APIs      | AirNow, Open-Meteo, NIFC ArcGIS FeatureServer          |
 
 ## Repo layout
@@ -132,8 +133,3 @@ You'll need: Airflow (with the Snowflake provider), a Snowflake account, and dbt
 
 5. Trigger the historical DAGs once for the initial backfill, then let the incremental + forecast + dbt DAGs run on schedule.
 
-## Notes
-
-- Forecasts are deliberately simple — pandas-based signals, not ML models. The goal is a tidy, testable pipeline that's easy to reason about, not a Kaggle leaderboard entry.
-- Tables in `analytics` are recreated/truncated on each forecast run, so the dbt snapshot layer is what gives you historical traceability of forecasts over time.
-- The AirNow realtime DAG currently has the API key inline — move it to `AIRNOW_API_KEY` env / Airflow Variable before sharing anywhere public.

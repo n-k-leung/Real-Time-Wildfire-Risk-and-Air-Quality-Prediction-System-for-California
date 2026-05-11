@@ -19,13 +19,21 @@ Cities in scope: **Los Angeles, Fresno, Riverside**.
 
 ![Wildfire Analytics Pipeline — System Architecture](docs/architecture.png)
 
-## Dashboard
+## Dashboards
 
-The final analytics layer is surfaced through a **Preset (Apache Superset)** dashboard covering historical, real-time, and forecasted wildfire and AQI views.
+The final analytics layer is surfaced through **Preset (Apache Superset)** dashboards covering historical, real-time, and forecasted wildfire and AQI views.
+
+### Realtime Analysis
 
 **[Open the live dashboard →](https://c7d5b8eb.us2a.app.preset.io/superset/dashboard/9/?native_filters_key=gkzrUD01yaM&standalone=1)**
 
 ![Realtime Analysis Dashboard](docs/Realtime_Analysis.png)
+
+### Wildfire & AQI Forecast
+
+**[Open the live dashboard →](<ADD_FORECAST_DASHBOARD_URL>)**
+
+![Wildfire & AQI Forecast Dashboard](docs/Wildfire_AQI_Forecast_Dashboard.png)
 
 ## Stack
 
